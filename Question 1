@@ -1,0 +1,223 @@
+close all; clear; clc;
+%% Question 1 generate data
+%Code based off Summer 2020 solution and Professor Deniz's google drive functions
+c = 4;
+data.s100.N = 100;
+data.s200.N = 200;
+data.s500.N = 500;
+data.s1k.N = 1000;
+data.s2k.N = 2000;
+data.v100k.N = 100000;
+dsets = fieldnames(data);
+
+for ind=1:length(dsets)
+    
+    [data.(dsets{ind}).samp,data.(dsets{ind}).labels,...
+        data.(dsets{ind}).Nl, data.(dsets{ind}).minPFE, data.(dsets{ind}).decisions]= generateDataA3(data.(dsets{ind}).N);
+end
+%% Question 1 plot data
+for ind=1:length(dsets)
+    %plot samples
+    figure();
+    plot3(data.(dsets{ind}).samp(1,data.(dsets{ind}).labels == 1), data.(dsets{ind}).samp(2,data.(dsets{ind}).labels==1), data.(dsets{ind}).samp(3,data.(dsets{ind}).labels == 1),'o',...
+        data.(dsets{ind}).samp(1,data.(dsets{ind}).labels == 2), data.(dsets{ind}).samp(2,data.(dsets{ind}).labels==2), data.(dsets{ind}).samp(3,data.(dsets{ind}).labels == 2),'+',...
+        data.(dsets{ind}).samp(1,data.(dsets{ind}).labels == 3), data.(dsets{ind}).samp(2,data.(dsets{ind}).labels==3), data.(dsets{ind}).samp(3,data.(dsets{ind}).labels == 3),'x',...
+        data.(dsets{ind}).samp(1,data.(dsets{ind}).labels == 4), data.(dsets{ind}).samp(2,data.(dsets{ind}).labels==4), data.(dsets{ind}).samp(3,data.(dsets{ind}).labels == 4),'*');
+    title("Class 1, 2, 3, 4 True Labels for " + data.(dsets{ind}).N + " samples");
+    xlabel('x1'); ylabel('x2'); zlabel('x3');
+    legend('Class 1', 'Class 2', 'Class 3', 'Class 4');
+end
+%% Question 1 Data Training and Validation
+for i = 1 : length(dsets)-1
+    [data.(dsets{i}).net, data.(dsets{i}).minError, data.(dsets{i}).optimalM, validation.(dsets{i}).stats] = ...
+        kfoldMLP(data.(dsets{i}).samp, data.(dsets{i}).labels, c);
+    
+    %Produce validation data from test dataset
+    validation.(dsets{i}).yVal=data.(dsets{i}).net(data.v100k.samp);
+    [~,validation.(dsets{i}).decisions]=max(validation.(dsets{i}).yVal);
+    
+    %Probability of Error is wrong decisions/num data points
+    validation.(dsets{i}).error=...
+        sum(validation.(dsets{i}).decisions~=data.v100k.labels)/data.v100k.N;
+    outpFE(i,1)=data.(dsets{i}).N;
+    outpFE(i,2)=validation.(dsets{i}).error;
+    outpFE(i,3)=data.(dsets{i}).optimalM;
+end
+%% Plot Results
+for ind= 1: length (dsets)-1
+    [~,select]=min(validation.(dsets{ind}).stats.mError);
+    M(ind)=(validation.(dsets{ind}).stats.M(select));
+    N(ind)=data.(dsets{ind}).N;
+end
+
+%Plot number of perceptrons vs. pFE for the cross validation runs
+for ind=1:length(dsets)-1
+    figure;
+    stem(validation.(dsets{ind}).stats.M,validation.(dsets{ind}).stats.mError);
+    xlabel('Number of Perceptrons');
+    ylabel('pFE');
+    title("Probability of Error vs. Number of Perceptrons for " + ...
+        data.(dsets{ind}).N + " data set");
+end
+
+%Number of perceptrons vs. size of training dataset
+figure(); semilogx(N(1:end),M(1:end),'o')
+xlabel('Number of Data Points')
+ylabel('Optimal Number of Perceptrons')
+ylim([0 10]);
+xlim([50 10^4]);
+title('Optimal Number of Perceptrons vs. Number of Data Points');
+
+%Prob. of Error vs. size of training data set
+figure(); semilogx(outpFE(1:end,1),outpFE(1:end,2),'o','LineWidth',2);
+xlim([90 10^4]);
+hold all;
+yline(data.v100k.minPFE, 'r--');
+legend('NN pFE','Optimal pFE')
+grid on
+xlabel('Number of Data Points')
+ylabel('pFE')
+title('Probability of Error vs. Data Points in Training Data');
+
+%% Function Training and Validation for MLP
+function [outputNet, outputError, optimalM, stats] = kfoldMLP(samp, labels, c)
+perceptrons = 15;
+kfolds = 5;
+N = length(samp);
+iter = 10;
+
+y = zeros(c, N);
+
+for i = 1: c
+    y(i,:) = (labels == i);
+end
+
+partitionSteps = N/kfolds;
+partitionInd = [1:partitionSteps:N length(samp)];
+
+for M = 1 : perceptrons
+    for i = 1: kfolds
+        ind.val = partitionInd(i) : partitionInd(i+1);
+        ind.train=setdiff(1:N,ind.val);
+        net=patternnet(M);
+        %net.layers{1}.transferFcn = 'poslin';
+        %net.layers{2}.transferFcn = 'softmax';
+        
+        net=train(net,samp(:,ind.train),y(:,ind.train));
+        %Validate with remaining data
+        yVal=net(samp(:,ind.val));
+        [~,labelVal]=max(yVal);
+        error(i)=sum(labelVal~=labels(ind.val))/partitionSteps;
+    end
+    
+    averageError(M)= mean(error);
+    stats.M = 1 : M;
+    stats.mError = averageError;
+end
+
+%Determine optimal number of perceptrons
+[~,optimalM]=min(averageError);
+
+%Train one final time on all the data
+for i=1:10
+    netName(i)={['net' num2str(i)]};
+    FinalNet.(netName{i})= patternnet(optimalM);
+    %FinalNet.layers{1}.transferFcn = 'poslin';
+    %FinalNet.layers{2}.transferFcn = 'softmax';
+    FinalNet.(netName{i})=train(net,samp,y);
+    yVal=FinalNet.(netName{i})(samp);
+    [~,labelVal]=max(yVal);
+    finalError(i)=sum(labelVal~=labels)/length(samp);
+end
+
+[minError,outInd]=min(finalError);
+stats.finalError=finalError;
+outputError=minError;
+outputNet=FinalNet.(netName{outInd});
+end
+
+%% function to generate data for the fisrt question
+function [samp, labels, Nl, minPFE,decisions] = generateDataA3(N)
+C = 4;
+n = 3; % Data dimensionality (must be 3 for plots to work)
+
+priors = [.25, .25, .25, .25];
+
+%create for gaussian sample means and covarince matrices
+meanVect(:,1)=[1; 1; 1]; meanVect(:,2)=[1; 1; -1];
+sigma(:,:,1) = .6*eye(3); sigma(:,:,2) = .6*eye(3);
+
+meanVect(:,3)=[1; -1; 1]; meanVect(:,4) = [1; -1; -1];
+sigma(:,:,3) = .5*eye(3); sigma(:,:,4) = .6*eye(3);
+
+meanVect(:,5)=[-1; 1; 1]; meanVect(:,6) = [-1; 1; -1];
+sigma(:,:,5) = .7*eye(3); sigma(:,:,6) = .6*eye(3);
+
+meanVect(:,7)=[-1; -1; 1]; meanVect(:,8) = [-1; -1; -1];
+sigma(:,:,7) = .5*eye(3); sigma(:,:,8) = .6*eye(3);
+
+samp = zeros(n,N); labels = zeros(1,N);
+
+%Decide randomly which samples will come from each component
+u = rand(1,N); thresholds = [cumsum(priors),1];
+for i = 1:C
+    indl = find(u <= thresholds(i)); Nl = length(indl);
+    labels(1,indl) = i*ones(1,Nl);
+    u(1,indl) = 1.1*ones(1,Nl); % these samples should not be used again
+    if i == 1
+        if (rand(1,1) > .5 )== 0
+            samp(:,indl) = mvnrnd(meanVect(:,1),sigma(:,:,1),Nl)';
+        else
+            samp(:,indl) = mvnrnd(meanVect(:,2),sigma(:,:,2),Nl)';
+        end
+    end
+    if i == 2
+        if (rand(1,1) > .5 )== 0
+            samp(:,indl) = mvnrnd(meanVect(:,3),sigma(:,:,3),Nl)';
+        else
+            samp(:,indl) = mvnrnd(meanVect(:,4),sigma(:,:,4),Nl)';
+        end
+    end
+    if i == 3
+        if (rand(1,1) > .5 )== 0
+            samp(:,indl) = mvnrnd(meanVect(:,5),sigma(:,:,5),Nl)';
+        else
+            samp(:,indl) = mvnrnd(meanVect(:,6),sigma(:,:,6),Nl)';
+        end
+    end
+    if i == 4
+        if (rand(1,1) > .5 )== 0
+            samp(:,indl) = mvnrnd(meanVect(:,7),sigma(:,:,7),Nl)';
+        else
+            samp(:,indl) = mvnrnd(meanVect(:,8),sigma(:,:,8),Nl)';
+        end
+    end
+    
+end
+
+for i = 1:C
+    if i == 1
+        pxgiveni(i,:) = .5*evalGaussianPDF(samp,meanVect(:,1),sigma(:,:,1))+.5*evalGaussianPDF(samp,meanVect(:,2),sigma(:,:,2));
+    end
+    if i == 2
+        pxgiveni(i,:) = .5*evalGaussianPDF(samp,meanVect(:,3),sigma(:,:,3))+.5*evalGaussianPDF(samp,meanVect(:,4),sigma(:,:,4));
+    end
+    if i == 3
+        pxgiveni(i,:) = .5*evalGaussianPDF(samp,meanVect(:,5),sigma(:,:,5))+.5*evalGaussianPDF(samp,meanVect(:,6),sigma(:,:,6));
+    end
+    if i == 4
+        pxgiveni(i,:) = .5*evalGaussianPDF(samp,meanVect(:,7),sigma(:,:,7))+.5*evalGaussianPDF(samp,meanVect(:,8),sigma(:,:,8));
+    end
+end
+
+px = priors*pxgiveni; % Total probability theorem
+classPosteriors = pxgiveni.*repmat(priors',1,N)./repmat(px,C,1); % P(L=l|x)
+
+lossMatrix = ones(C,C)-eye(C); % For min-Perror design, use 0-1 loss
+expectedRisks = lossMatrix*classPosteriors; % Expected Risk for each label (rows) for each sample (columns)
+[~,decisions] = min(expectedRisks,[],1); % Minimum expected risk decision with 0-1 loss is the same as MAP
+
+fDecision_ind=(decisions~=labels);%Incorrect classificiation vector
+minPFE=sum(fDecision_ind)/N;
+
+end
