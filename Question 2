@@ -1,0 +1,147 @@
+close all; clear; clc;
+%% data generatiom
+%code based off professor deniz's google drive functions 
+tic
+n = 2;
+C = 5;
+
+%Define data
+data.s100.N = 100;
+data.s1k.N= 1000;
+data.s5k.N= 5000;
+data.s10k.N = 10000;
+data.s50k.N = 50000;
+data.s100k.N = 100000;
+data.s1m.N = 500000;
+dsets=fieldnames(data);
+
+E = 60;
+maxM = 8;
+%class priors
+priors = [.2, .2, .2, .2, .2];
+
+%class 1 parameters
+mu(:,1)= [0;0]; sigma(:,:,1) = [1 0; 0 1];
+
+mu(:,2) = [-4;-4]; sigma(:,:,2) = [1 0; 0 1];
+
+mu(:,3) = [-2;2]; sigma(:,:,3) = [1 0; 0 1];
+
+mu(:,4) = [4;4]; sigma(:,:,4) = [1 0; 0 1];
+
+mu(:,5) = [2;-2]; sigma(:,:,5) = [1 0; 0 1];
+
+plotOnce = 1;
+
+for samples = 1 : length(dsets)
+    for j = 1: E
+        data.(dsets{samples}).samp = zeros(n,data.(dsets{samples}).N); data.(dsets{samples}).labels = zeros(1,data.(dsets{samples}).N);
+        
+        %Decide randomly which samples will come from each component
+        u = rand(1,data.(dsets{samples}).N); thresholds = [cumsum(priors),1];
+        
+        for i = 1:C
+            indl = find(u <= thresholds(i)); data.(dsets{samples}).Nl = length(indl);
+            data.(dsets{samples}).labels(1,indl) = i*ones(1,data.(dsets{samples}).Nl);
+            u(1,indl) = 1.1*ones(1,data.(dsets{samples}).Nl); % these samples should not be used again
+            data.(dsets{samples}).samp(:,indl) = mvnrnd(mu(:,i),sigma(:,:,i),data.(dsets{samples}).Nl)';
+        end
+        if plotOnce == 1
+            figure()
+            plot(data.(dsets{samples}).samp(1,data.(dsets{samples}).labels == 1), data.(dsets{samples}).samp(2,data.(dsets{samples}).labels==1), 'o', ...
+                data.(dsets{samples}).samp(1,data.(dsets{samples}).labels == 2), data.(dsets{samples}).samp(2,data.(dsets{samples}).labels==2),'+', ...
+                data.(dsets{samples}).samp(1,data.(dsets{samples}).labels == 3), data.(dsets{samples}).samp(2,data.(dsets{samples}).labels==3),'x', ...
+                data.(dsets{samples}).samp(1,data.(dsets{samples}).labels == 4), data.(dsets{samples}).samp(2,data.(dsets{samples}).labels==4),'*', ...
+                data.(dsets{samples}).samp(1,data.(dsets{samples}).labels == 5), data.(dsets{samples}).samp(2,data.(dsets{samples}).labels==5),'.');
+            plotOnce = 0;
+            title("Data for " + data.(dsets{samples}).N + " samples");
+            xlabel('x1'); ylabel('x2');
+        end
+        [bestM(:,j),BIC] = BICforGMM(data.(dsets{samples}).samp,maxM);
+        [bestMKFold(:,j),bestGMM{E}] = kfold(data.(dsets{samples}).samp,maxM,data.(dsets{samples}).N);
+        samples,
+        j,
+    end
+    figure()
+    hist(bestMKFold, [1:1:maxM]);
+    title("Histogram of chosen M for each experiment on dataset of " + data.(dsets{samples}).N + " samples for Kfold");
+    
+    figure()
+    hist(bestM, [1:1:maxM]);
+    title("Histogram of chosen M for each experiment on dataset of " + data.(dsets{samples}).N + " samples for BIC");
+    plotOnce = 1;
+end
+figure(), plot([1:maxM],BIC(1:maxM),'.'),
+xlabel('Number of Gaussian Components in GMM'),
+ylabel('BIC'),
+drawnow,
+toc
+%% functions
+function [bestM, BIC] = BICforGMM(x,maxM)
+% Generates N samples from a specified Gaussian Mixture PDF
+% then uses EM algorithm to estimate the parameters along
+% with BIC to select the model order, which is the number
+% of Gaussian components for the model.
+
+[d, N] = size(x); % number of scalar data values, though not independent, counting as if they are
+nSamples = d*N;
+% Evaluate BIC for candidate model orders
+%maxM = floor(N^(1/2)); % arbitrarily selecting the maximum model using this rule
+for M = 1:maxM
+    nParams(1,M) = (M-1) + d*M + M*(d+nchoosek(d,2));
+    % (M-1) is the degrees of freedomg for alpha parameters
+    % d*M is the derees of freedomg for mean vectors of M Gaussians
+    % M*(d+nchoosek(d,2)) is the degrees of freedom in cov matrices
+    % For cov matrices, due to symmetry, only count diagonal and half of
+    % off-diagonal entries.
+    options = statset('MaxIter',1000); % Specify max allowed number of iterations for EM
+    % Run EM 'Replicates' many times and pickt the best solution
+    % This is a brute force attempt to catch the globak maximum of
+    % log-likelihood function during EM based optimization
+    gm{M} = fitgmdist(x',M,'Replicates',5,'RegularizationValue',1e-10,'Options',options);
+    neg2logLikelihood(1,M) = -2*sum(log(pdf(gm{M},x')));
+    BIC(1,M) = neg2logLikelihood(1,M) + nParams(1,M)*log(nSamples);
+end
+[~,bestM] = min(BIC);
+%bestGMM = gm{bestM},
+
+end
+
+%% function
+function [bestM, bestGMM] = kfold(data, maxM, N)
+
+k = 10;
+dummy = ceil(linspace(0,N, k + 1));
+options = statset('MaxIter',1000);
+
+for i = 1 : k
+    partLim(i,:) =[ dummy(i)+1,dummy(i+1)];
+end
+
+for M = 1:maxM
+    %[M,N],
+    
+    % K-fold cross validation
+    for i = 1:k
+        indValidate = [partLim(i,1): partLim(i,2)];
+        validation = data(:,indValidate);
+        if i == 1
+            indTrain = [partLim(i+1,1):N];
+        elseif i == k
+            indTrain = [1:partLim(i-1,2)];
+        else
+            indTrain = [1:partLim(i-1,2),partLim(i+1,1):N];
+        end
+        dataTrain = data(:,indTrain);
+        NTrain = length(indTrain);
+        NValidate = length(indValidate);
+        
+        % Train model parameters
+        gm{M,i} = fitgmdist(dataTrain',M,'Replicates',20,'RegularizationValue',1e-10,'Options',options);
+        EM(i) = sum(log(pdf(gm{M,i},validation')));
+    end
+    meanEM(M) = sum(EM)/N;
+end
+[~,bestM] = max(meanEM);
+bestGMM = fitgmdist(data',bestM,'Replicates',5,'Options',options);
+end
